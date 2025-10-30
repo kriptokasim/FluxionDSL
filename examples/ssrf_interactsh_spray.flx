@@ -1,0 +1,36 @@
+# Interactsh multi-token spray
+#
+# Sends several unique beacons to the provided Interactsh domain so you can
+# confirm SSRF reachability and observe multiple hits in your listener.
+#
+# Usage:
+#   FLUXION_STDLIB=requests fluxion -s examples/ssrf_interactsh_spray.flx -D token=baseline
+
+let oast_domain = "d41r8ucgtqkrv6t72u0gmht8euiepuo44.oast.live"
+let base_token = token ?? "fluxion"
+let suffixes = ["alpha", "bravo", "charlie"]
+let successes = 0
+
+for part in suffixes {
+  let full_token = join(base_token, "-", part)
+  let beacon = oast_beacon({
+    sub: full_token,
+    domain: oast_domain,
+    path: "/fluxion/spray",
+    q: {"segment": part}
+  })
+
+  if (beacon && beacon.ok) {
+    successes = successes + 1
+  }
+
+  echo value=jsonify({
+    "token": full_token,
+    "status": (beacon ? beacon.status : null),
+    "ok": (beacon ? beacon.ok : null),
+    "url": (beacon ? beacon.url : null)
+  })
+}
+
+echo value=jsonify({"attempted": len(suffixes), "ok_count": successes})
+return successes

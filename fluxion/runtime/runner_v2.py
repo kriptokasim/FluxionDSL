@@ -3,6 +3,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import json
+import time
+import socket
+from urllib.parse import urlencode
+
+import requests
 from lark import Tree
 from fluxion.core.parser import parse  # AST Lark Tree'lerini üreten parse
 
@@ -74,18 +79,57 @@ def _make_echo(scope: Scope):
 
 
 def jsonify(*args, **kwargs):
-    """Basitçe JSON üretip string olarak döndürür."""
-    if args and kwargs:
-        raise TypeError("jsonify accepts either positional or keyword arguments, not both")
-    if args:
-        payload = args[0] if len(args) == 1 else list(args)
-    else:
+    """
+    JSON üretir. Hem kwargs (jsonify(a=1)) hem de tek positional payload (jsonify({"a":1}))
+    desteği var. Birden çok positional verilirse ilk dict/list’i alır.
+    """
+    payload = None
+    if kwargs:
         payload = kwargs
+    elif args:
+        for a in args:
+            if isinstance(a, (dict, list)):
+                payload = a
+                break
+    if payload is None and args:
+        # Fallback: ilk arg'ı stringle
+        payload = args[0]
     return json.dumps(payload, ensure_ascii=False)
 
 def join(*args):
     return "".join(str(a) for a in args)
 
+def _http_head_impl(url: str, timeout: float = 5.0, allow_redirects: bool = True, verify: bool = False):
+    try:
+        t0 = time.time()
+        r = requests.head(url, timeout=timeout, allow_redirects=allow_redirects, verify=verify)
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return {
+            "ok": r.ok,
+            "status": r.status_code,
+            "elapsed_ms": elapsed_ms,
+            "length": int(r.headers.get("Content-Length", 0)),
+            "headers": dict(r.headers),
+        }
+    except Exception as e:
+        return {"ok": False, "status": 0, "elapsed_ms": 0, "length": 0, "error": str(e), "headers": {}}
+        
+def _http_get_impl(url: str, timeout: float = 5.0, allow_redirects: bool = True, verify: bool = False, preview: int = 512):
+    try:
+        t0 = time.time()
+        r = requests.get(url, timeout=timeout, allow_redirects=allow_redirects, verify=verify)
+        elapsed_ms = int((time.time() - t0) * 1000)
+        text_preview = r.text[:preview] if isinstance(r.text, str) else ""
+        return {
+            "ok": r.ok,
+            "status": r.status_code,
+            "elapsed_ms": elapsed_ms,
+            "length": len(r.content or b""),
+            "text_preview": text_preview,
+            "headers": dict(r.headers),
+        }
+    except Exception as e:
+        return {"ok": False, "status": 0, "elapsed_ms": 0, "length": 0, "text_preview": "", "error": str(e), "headers": {}}
 
 def length(value):
     try:
@@ -94,19 +138,84 @@ def length(value):
         return 0
 
 # Minimal http_* dummy’leri
-def http_head(_url: str) -> Dict[str, Any]:
-    return {"ok": False, "status": 0, "elapsed_ms": 0, "length": 0, "headers": {}}
+def http_head(*args, **kwargs):
+    """
+    Hem call hem command tarzında çalışsın diye argümanları esnek alıyoruz.
+    http_head("http://x")  ya da  http_head url="http://x"  şeklinde.
+    """
+    url = None
+    if "url" in kwargs:
+        url = kwargs["url"]
+    elif args:
+        url = args[0]
+    if not url:
+        return {"ok": False, "status": 0, "elapsed_ms": 0, "length": 0, "error": "missing url", "headers": {}}
+    return _http_head_impl(str(url), timeout=float(kwargs.get("timeout", 5.0)))
 
-def http_get(_url: str) -> Dict[str, Any]:
-    return {"ok": False, "status": 0, "elapsed_ms": 0, "length": 0, "text_preview": ""}
+def http_get(*args, **kwargs):
+    url = None
+    if "url" in kwargs:
+        url = kwargs["url"]
+    elif args:
+        url = args[0]
+    if not url:
+        return {"ok": False, "status": 0, "elapsed_ms": 0, "length": 0, "text_preview": "", "error": "missing url", "headers": {}}
+    return _http_get_impl(str(url), timeout=float(kwargs.get("timeout", 5.0)))
+
+def oast_beacon(*args, **kwargs):
+    """
+    OAST’e DNS + HTTP sinyali yollar.
+    Kullanım:
+      oast_beacon sub="123", domain="abcd.oast.pro", path="/x", q={t: token}
+    veya
+      oast_beacon "123" "abcd.oast.pro" "/x"
+    """
+    positional = list(args)
+    params: Dict[str, Any] = {}
+
+    if positional and isinstance(positional[0], dict):
+        params.update({str(k): v for k, v in positional[0].items()})
+        positional = positional[1:]
+
+    params.update({str(k): v for k, v in kwargs.items()})
+
+    sub = params.get("sub") or (str(positional[0]) if len(positional) > 0 else None)
+    domain = params.get("domain") or (str(positional[1]) if len(positional) > 1 else None)
+    path = params.get("path") or (str(positional[2]) if len(positional) > 2 else "/")
+    scheme = params.get("scheme", "http")
+    q = params.get("q", None)
+    timeout = float(params.get("timeout", 5.0))
+
+    if not sub or not domain:
+        return {"ok": False, "error": "missing sub or domain"}
+
+    fqdn = f"{sub}.{domain}".strip(".")
+    # DNS ping (hata verse de önemli değil; sadece sorgu tetiklesin)
+    try:
+        socket.getaddrinfo(fqdn, 80)
+    except Exception:
+        pass
+
+    url = f"{scheme}://{fqdn}{path}"
+    if isinstance(q, dict) and q:
+        url = f"{url}?{urlencode({str(k): str(v) for k, v in q.items()})}"
+
+    try:
+        t0 = time.time()
+        r = requests.get(url, timeout=timeout, allow_redirects=True, verify=False)
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return {"ok": r.ok, "status": r.status_code, "elapsed_ms": elapsed_ms, "url": url}
+    except Exception as e:
+        return {"ok": False, "status": 0, "elapsed_ms": 0, "url": url, "error": str(e)}
 
 STDLIB_FUNCS = {
     "jsonify": jsonify,
     "join": join,
-    "len": length,
+    "len": len,            # küçük ama faydalı
     "http_head": http_head,
     "http_get": http_get,
-    # "echo" dinamik eklenecek
+    "oast_beacon": oast_beacon,
+    # "echo" dinamik eklenecek (_make_echo)
 }
 
 # ============================================================

@@ -130,8 +130,8 @@ multiplicative: unary ((STAR | SLASH | PERCENT) unary)*
         | "nil"   -> null_
 
 // Function call
-call: IDENT "(" arg_expr_list? ")"
-arg_expr_list: expr ("," expr)*
+call: IDENT "(" script_ws? arg_expr_list? ")"
+arg_expr_list: expr (COMMA script_ws? expr)* (COMMA script_ws?)?
 
 // Property access chain
 get_chain: IDENT ("." IDENT)+

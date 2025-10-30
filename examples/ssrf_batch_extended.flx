@@ -1,4 +1,0 @@
-fn inc(a) { return a + 1 }
-let x = 3
-let y = inc(x)
-return y

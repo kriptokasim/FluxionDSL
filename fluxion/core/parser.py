@@ -141,6 +141,8 @@ class BuildAST(Transformer):
         # virgülleri at ve ifadeleri topla
         out = []
         for e in exprs:
+            if isinstance(e, Tree) and getattr(e, "data", None) in ("script_ws", "list_ws"):
+                continue
             if isinstance(e, Token) and e.type == 'COMMA':
                 continue
             elif isinstance(e, Tree):
@@ -178,10 +180,11 @@ class BuildAST(Transformer):
 
     # calls
     def call(self, name, *rest):
-        if not rest:
+        filtered = [r for r in rest if not (isinstance(r, Tree) and getattr(r, "data", None) in ("script_ws", "list_ws"))]
+        if not filtered:
             argv = []
-        elif len(rest) == 1:
-            a = rest[0]
+        elif len(filtered) == 1:
+            a = filtered[0]
             if isinstance(a, list):
                 argv = a
             elif isinstance(a, Tree):
@@ -189,7 +192,7 @@ class BuildAST(Transformer):
             else:
                 argv = [a]
         else:
-            argv = list(rest)
+            argv = list(filtered)
         return Node("call", name=str(name), args=argv)
 
     # postfix get chain: Tree('get_chain', [atom, 'NAME', 'NAME', ...])
