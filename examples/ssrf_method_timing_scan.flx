@@ -1,0 +1,26 @@
+# examples/ssrf_method_timing_scan.flx
+# Kullanım:
+#   python -m fluxion -s examples/ssrf_method_timing_scan.flx
+#   veya listeyi -D targets='["http://example.com/","http://169.254.169.254/"]' ile değiştir
+
+let targets = targets ?? [
+  "http://127.0.0.1:80/",
+  "http://localhost:8080/",
+  "http://169.254.169.254/",
+  "http://example.com/"
+]
+
+let out = []
+for u in targets {
+  let h = http_head(u)
+  let g = http_get(u)
+  out = out + [ { "url": u, "head": h, "get": g } ]
+}
+
+echo value=jsonify({
+  "results": out,
+  "ok_count": len([1 for r in out if (r.get && r.get.ok) || (r.head && r.head.ok)]),
+  "total": len(out)
+})
+
+return len(out)
