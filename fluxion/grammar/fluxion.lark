@@ -17,6 +17,23 @@ IDENT: /[A-Za-z_][A-Za-z0-9_\-]*/
 EQUAL: "="
 COLON: ":"
 ARROW: "=>"
+COMMA: ","
+LE: "<="
+GE: ">="
+EQEQ: "=="
+NOTEQ: "!="
+NULLISH_OP: "??"
+AND_OP: "&&"
+OR_OP: "||"
+PLUS: "+"
+MINUS: "-"
+STAR: "*"
+SLASH: "/"
+PERCENT: "%"
+NOT: "!"
+LT: "<"
+GT: ">"
+QMARK: "?"
 
 // Strings: double-quoted with escapes
 DQSTRING: /"([^"\\]|\\.)*"/
@@ -25,7 +42,12 @@ DQSTRING: /"([^"\\]|\\.)*"/
 NUMBER: /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/
 
 // Entry point
-start: NL* (statement (NL)+)* statement? NL*
+start: script?
+
+// Script = optional leading/trailing newlines around statements
+script: script_ws? statement (script_ws statement)* script_ws?
+
+script_ws: NL+
 
 // Statements
 ?statement: assign
@@ -53,38 +75,43 @@ if_: "if" "(" expr ")" block ("else" (block | if_))?
 for_: "for" IDENT "in" expr block
 
 // func name(params) { ... }
-func: "func" IDENT "(" param_list? ")" block
+func: ("func" | "fn") IDENT "(" param_list? ")" block
 param_list: IDENT ("," IDENT)*
 
 // Block of statements
-block: "{" NL* (statement (NL)+)* statement? NL* "}"
+block: "{" script? "}"
 
 // Expression as statement
 expr_stmt: expr
 
-// Command: NAME { key: value, ... } or NAME (desugared from NAME key=value)
-command: IDENT map
+// Command: NAME { key: value, ... } or inline key=value pairs
+command: IDENT NL? command_args
+
+command_args: map
+             | inline_command_args
+
+inline_command_args: keyval (COMMA script_ws? keyval)*
 
 // Expressions with precedence
 ?expr: ternary
 
-?ternary: logical_or ("?" expr ":" expr)?
+?ternary: logical_or (QMARK expr COLON expr)?
 
-logical_or: logical_and ("||" logical_and)*
+logical_or: logical_and (OR_OP logical_and)*
 
-logical_and: equality ("&&" equality)*
+logical_and: equality (AND_OP equality)*
 
-equality: comparison (("==" | "!=") comparison)*
+equality: comparison ((EQEQ | NOTEQ) comparison)*
 
-comparison: nullish_coalesce (("<" | ">" | "<=" | ">=") nullish_coalesce)*
+comparison: nullish_coalesce ((LT | GT | LE | GE) nullish_coalesce)*
 
-nullish_coalesce: additive ("??" additive)*
+nullish_coalesce: additive (NULLISH_OP additive)*
 
-additive: multiplicative (("+" | "-") multiplicative)*
+additive: multiplicative ((PLUS | MINUS) multiplicative)*
 
-multiplicative: unary (("*" | "/" | "%") unary)*
+multiplicative: unary ((STAR | SLASH | PERCENT) unary)*
 
-?unary: ("!" | "-" | "+") unary
+?unary: (NOT | MINUS | PLUS) unary
       | postfix
 
 ?postfix: primary ("." IDENT)*
@@ -117,11 +144,12 @@ dqstring: DQSTRING
 number: NUMBER
 
 // Collections
-list: "[" NL* list_items? NL* "]"
-list_items: expr (NL* "," NL* expr)* (NL* ",")?
+list: "[" list_ws? list_items? list_ws? "]"
+list_ws: NL+
+list_items: expr ("," list_ws? expr)* ("," list_ws?)?
 
-map:  "{" NL* map_items? NL* "}"
-map_items: keyval (NL* "," NL* keyval)* (NL* ",")?
+map:  "{" list_ws? map_items? list_ws? "}"
+map_items: keyval ("," list_ws? keyval)* ("," list_ws?)?
 
 keyval: (IDENT | DQSTRING) (":" | "=") expr
 

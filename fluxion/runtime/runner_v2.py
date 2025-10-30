@@ -1,35 +1,46 @@
 # fluxion/runtime/runner_v2.py
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
+
 import json
 from lark import Tree
-from fluxion.core.parser import parse
-from fluxion import stdlib as flx_stdlib
+from fluxion.core.parser import parse  # AST Lark Tree'lerini üreten parse
 
-# ---------- helpers ----------
+# ============================================================
+# Yardımcı sinyaller / tipler
+# ============================================================
+
 class _ReturnSignal:
     def __init__(self, value: Any):
         self.value = value
 
 Scope = Dict[str, Any]
+
+# Bazı sabitler
 BOOLS = {"true": True, "false": False, "null": None, "nil": None}
 
-def _as_bool(v: Any) -> bool: return bool(v)
-def _is_nullish(v: Any) -> bool: return v is None
+# ============================================================
+# Stdlib (minimal)
+# ============================================================
 
-# ---------- echo interpolation ----------
 def _interpolate_string(raw: str, scope: Scope) -> str:
+    """
+    "X={{1}} {{x}}" gibi çift süslü parantez içi ifadeleri basitçe değerlendir.
+    - Sadece basit sabitler (int/float), bools ve değişken isimleri desteklenir.
+    """
     import re
-    s = raw
-    if len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
-        s = s[1:-1]
 
     def repl(m):
         expr = m.group(1).strip()
+        # bools
         if expr in BOOLS:
-            v = BOOLS[expr]; return "" if v is None else str(v)
+            v = BOOLS[expr]
+            return "" if v is None else str(v)
+        # scope var
         if expr in scope:
-            v = scope[expr]; return "" if v is None else str(v)
+            v = scope[expr]
+            return "" if v is None else str(v)
+        # sayılar
         try:
             return str(int(expr))
         except Exception:
@@ -38,135 +49,164 @@ def _interpolate_string(raw: str, scope: Scope) -> str:
             return str(float(expr))
         except Exception:
             pass
-        v = scope.get(expr)
-        return "" if v is None else str(v)
+        # bilinmiyorsa None gibi davran
+        return "" if scope.get(expr) is None else str(scope.get(expr))
 
+    # Çift/single tırnakları soyup çalış
+    s = raw
+    if isinstance(s, str) and len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
+        s = s[1:-1]
     return re.sub(r"\{\{([^}]+)\}\}", repl, s)
+
 
 def _make_echo(scope: Scope):
     def _echo(**kwargs):
-        cooked = {k: (_interpolate_string(v, scope) if isinstance(v, str) else v)
-                  for k, v in kwargs.items()}
-        scope["_last_command"] = {"name": "echo", "args": cooked}
+        # args'ı interpolate edip sakla
+        args_cooked = {}
+        for k, v in kwargs.items():
+            if isinstance(v, str):
+                args_cooked[k] = _interpolate_string(v, scope)
+            else:
+                args_cooked[k] = v
+        scope["_last_command"] = {"name": "echo", "args": args_cooked}
         return None
     return _echo
 
-# ---------- stdlib ----------
-def jsonify(obj: Any = None, **kwargs):
-    if obj is not None and kwargs:
-        return json.dumps({"_": obj, **kwargs}, ensure_ascii=False)
-    if obj is not None:
-        return json.dumps(obj, ensure_ascii=False)
-    return json.dumps(kwargs, ensure_ascii=False)
 
-def join(*args): return "".join(str(a) for a in args)
+def jsonify(*args, **kwargs):
+    """Basitçe JSON üretip string olarak döndürür."""
+    if args and kwargs:
+        raise TypeError("jsonify accepts either positional or keyword arguments, not both")
+    if args:
+        payload = args[0] if len(args) == 1 else list(args)
+    else:
+        payload = kwargs
+    return json.dumps(payload, ensure_ascii=False)
 
+def join(*args):
+    return "".join(str(a) for a in args)
+
+
+def length(value):
+    try:
+        return len(value)
+    except Exception:
+        return 0
+
+# Minimal http_* dummy’leri
 def http_head(_url: str) -> Dict[str, Any]:
     return {"ok": False, "status": 0, "elapsed_ms": 0, "length": 0, "headers": {}}
 
 def http_get(_url: str) -> Dict[str, Any]:
     return {"ok": False, "status": 0, "elapsed_ms": 0, "length": 0, "text_preview": ""}
 
-STDLIB_FUNCS = dict(flx_stdlib.FUNCS)
-STDLIB_FUNCS["len"] = len
-# echo scope'a enjekte ediliyor
+STDLIB_FUNCS = {
+    "jsonify": jsonify,
+    "join": join,
+    "len": length,
+    "http_head": http_head,
+    "http_get": http_get,
+    # "echo" dinamik eklenecek
+}
 
-# ---------- invocation plumbing ----------
-def _invoke_function(fname: str, args_pos: List[Any], args_kw: Dict[str, Any], scope: Scope) -> Any:
-    fn = scope.get("__funcs__", {}).get(fname)
-    if callable(fn):
-        try:
-            return fn(*args_pos, **args_kw) if args_kw else fn(*args_pos)
-        except TypeError:
-            return fn(*args_pos)
+# ============================================================
+# Değer dönüştürücüler
+# ============================================================
 
-    fn = scope.get("__stdlib__", {}).get(fname)
-    if callable(fn):
-        try:
-            return fn(*args_pos, **args_kw) if args_kw else fn(*args_pos)
-        except TypeError:
-            return fn(*args_pos)
+def _as_bool(v: Any) -> bool:
+    return bool(v)
 
-    return None
+def _is_nullish(v: Any) -> bool:
+    return v is None
 
-def _collect_call_args(node_or_tree: Any, scope: Scope) -> (str, List[Any], Dict[str, Any]):
-    """
-    BuildAST Node(call/command) ya da Lark Tree(call) alır.
-    Farklı üreticiler için hem positional hem keyword varyantlarını toparlar.
-    """
-    # BuildAST Node
-    typ = getattr(node_or_tree, "typ", None)
-    if typ in ("call", "command"):
-        fname = getattr(node_or_tree, "name", "")
-        pos: List[Any] = []
-        kw: Dict[str, Any] = {}
 
-        # 1) Yaygın: args (list | Tree | dict)
-        if hasattr(node_or_tree, "args"):
-            a = getattr(node_or_tree, "args")
-            if isinstance(a, list):
-                pos = [_eval_any(x, scope) for x in a]
-            elif isinstance(a, Tree):
-                pos = [_eval_any(x, scope) for x in (a.children or [])]
-            elif isinstance(a, dict):
-                for k, v in a.items():
-                    kw[k] = _eval_any(v, scope)
+def _resolve_attr(base: Any, name: str) -> Any:
+    """Fetch attribute or mapping entry by name, returning None when missing."""
+    if base is None:
+        return None
+    if isinstance(base, dict):
+        return base.get(name)
+    if isinstance(base, (list, tuple)) and name.isdigit():
+        idx = int(name)
+        if 0 <= idx < len(base):
+            return base[idx]
+        return None
+    return getattr(base, name, None)
 
-        # 2) Tekli arg: arg
-        if hasattr(node_or_tree, "arg"):
-            pos.append(_eval_any(getattr(node_or_tree, "arg"), scope))
+# ============================================================
+# Evaluator
+# ============================================================
 
-        # 3) Bazı build’ler: params / arguments
-        if hasattr(node_or_tree, "params"):
-            p = getattr(node_or_tree, "params")
-            if isinstance(p, list):
-                pos.extend(_eval_any(x, scope) for x in p)
-        if hasattr(node_or_tree, "arguments"):
-            p = getattr(node_or_tree, "arguments")
-            if isinstance(p, list):
-                pos.extend(_eval_any(x, scope) for x in p)
-
-        # 4) kwargs (dict)
-        if hasattr(node_or_tree, "kwargs") and isinstance(node_or_tree.kwargs, dict):
-            for k, v in node_or_tree.kwargs.items():
-                kw[k] = _eval_any(v, scope)
-
-        return fname, pos, kw
-
-    # Lark Tree(call)
-    if isinstance(node_or_tree, Tree) and node_or_tree.data == "call":
-        if not node_or_tree.children:
-            return "", [], {}
-        fname = str(node_or_tree.children[0])
-        pos_nodes = node_or_tree.children[1:]
-        pos = [_eval_any(a, scope) for a in pos_nodes]
-        return fname, pos, {}
-
-    return "", [], {}
-
-# ---------- evaluator ----------
 def _eval_any(node: Any, scope: Scope) -> Any:
+    """
+    Node olabilir (typ attribute) veya Lark Tree olabilir.
+    """
+    # BuildAST'ten gelen Node tipi varsa:
     t = getattr(node, "typ", None)
     if t:
-        if t == "num":  return node.value
-        if t == "str":  return _interpolate_string(node.value, scope)
+        if t == "num":
+            return node.value
+        if t == "str":
+            # Interpolasyon destekleyelim (echo testinde bekleniyor)
+            return _interpolate_string(node.value, scope)
         if t == "var":
             name = node.name
-            if name in BOOLS: return BOOLS[name]
+            if name in BOOLS:
+                return BOOLS[name]
             return scope.get(name)
         if t == "list":
             return [_eval_any(x, scope) for x in node.items]
         if t == "map":
             return {k: _eval_any(v, scope) for k, v in node.items.items()}
-        if t in ("call", "command"):
-            fname, pos, kw = _collect_call_args(node, scope)
-            return _invoke_function(fname, pos, kw, scope) if fname else None
+        if t == "get":
+            base = _eval_any(getattr(node, "obj", None), scope)
+            return _resolve_attr(base, node.name)
+        if t == "getprop":
+            base = _eval_any(getattr(node, "base", None), scope)
+            return _resolve_attr(base, node.name)
+        if t == "call":
+            # Built-in veya kullanıcı fonksiyonu
+            fname = node.name
+            # Arglar: BuildAST bazı yerlerde raw liste döndürür; burada normalize edip değerlendiririz
+            raw_args = node.args or []
+            args = []
+            for a in raw_args:
+                if isinstance(a, Tree):
+                    args.extend([_eval_any(c, scope) for c in a.children])
+                else:
+                    args.append(_eval_any(a, scope))
+
+            # user fn?
+            fn = scope.get("__funcs__", {}).get(fname)
+            if callable(fn):
+                return fn(*args)
+            # stdlib?
+            fn = scope.get("__stdlib__", {}).get(fname)
+            if callable(fn):
+                return fn(*args)
+            return None
+        if t == "command":
+            # Komutları _exec_stmt içinde ele alacağız
+            return None
+        if t == "func":
+            # Fonksiyon tanımı _exec_stmt'te işlenecek
+            return None
+        if t == "assign":
+            # Atama _exec_stmt'te
+            return None
+        if t == "return":
+            # Return _exec_stmt'te
+            return None
+        # Fallback
         return None
 
+    # Tree ise:
     if isinstance(node, Tree):
         return _eval_tree(node, scope)
 
+    # Başka tipler (literal vs.)
     return node
+
 
 def _eval_tree(t: Tree, scope: Scope) -> Any:
     typ = t.data
@@ -176,40 +216,58 @@ def _eval_tree(t: Tree, scope: Scope) -> Any:
         last = None
         for ch in t.children:
             r = _eval_tree(ch, scope)
-            if isinstance(r, _ReturnSignal): return r
-            if r is not None: last = r
+            if isinstance(r, _ReturnSignal): 
+                return r
+            if r is not None: 
+                last = r
         return last
 
     if typ == "stmt":
         return _exec_stmt(t.children[0], scope) if t.children else None
 
-    # expr ağaçları (updated for new grammar)
+    # expr ağaçları
     if typ in ("coalesce", "nullish_coalesce"):
+        if not t.children:
+            return None
         val = _eval_any(t.children[0], scope); i = 1
         while i < len(t.children):
             rhs = _eval_any(t.children[i + 1], scope)
-            if not _is_nullish(val): return val
+            if not _is_nullish(val): 
+                return val
             val = rhs; i += 2
         return val
 
     if typ in ("or_expr", "logical_or"):
+        if not t.children:
+            return None
         val = _eval_any(t.children[0], scope); i = 1
         while i < len(t.children):
             rhs = _eval_any(t.children[i + 1], scope)
-            if _as_bool(val): return True
-            val = _as_bool(val) or _as_bool(rhs); i += 2
+            if _as_bool(val):
+                return val
+            val = rhs
+            i += 2
         return val
 
     if typ in ("and_expr", "logical_and"):
+        if not t.children:
+            return None
         val = _eval_any(t.children[0], scope); i = 1
         while i < len(t.children):
             rhs = _eval_any(t.children[i + 1], scope)
-            if not _as_bool(val): return False
-            val = _as_bool(val) and _as_bool(rhs); i += 2
+            if not _as_bool(val):
+                return val
+            val = rhs
+            i += 2
         return val
 
     if typ in ("compare", "comparison", "equality"):
+        if not t.children:
+            return None
+        if len(t.children) == 1:
+            return _eval_any(t.children[0], scope)
         left = _eval_any(t.children[0], scope); i = 1
+        result = True
         while i < len(t.children):
             op = str(t.children[i]); right = _eval_any(t.children[i + 1], scope)
             if   op == "==": ok = (left == right)
@@ -219,9 +277,11 @@ def _eval_tree(t: Tree, scope: Scope) -> Any:
             elif op == ">":  ok = (left >  right)
             elif op == ">=": ok = (left >= right)
             else: raise RuntimeError(f"Unknown compare op: {op}")
-            if not ok: return False
+            if not ok:
+                return False
+            result = ok
             left = right; i += 2
-        return True
+        return result
 
     if typ in ("sum", "additive"):
         val = _eval_any(t.children[0], scope); i = 1
@@ -242,21 +302,69 @@ def _eval_tree(t: Tree, scope: Scope) -> Any:
             i += 2
         return val
 
+    if typ == "ternary":
+        if not t.children:
+            return None
+        cond_val = _eval_any(t.children[0], scope)
+        if len(t.children) < 5:
+            return cond_val
+        true_expr = t.children[2]
+        false_expr = t.children[4] if len(t.children) > 4 else None
+        return _eval_any(true_expr, scope) if _as_bool(cond_val) else _eval_any(false_expr, scope)
+
+    if typ == "unary":
+        if not t.children:
+            return None
+        if len(t.children) == 1:
+            return _eval_any(t.children[0], scope)
+        op_token, operand_node = t.children[0], t.children[1]
+        val = _eval_any(operand_node, scope)
+        op = str(op_token)
+        if op == "!":
+            return not _as_bool(val)
+        if op == "-":
+            return -val
+        if op == "+":
+            return +val
+        return val
+
     if typ == "factor" and len(t.children) == 2 and str(t.children[0]) == "-":
         return -_eval_any(t.children[1], scope)
 
     if typ in ("expr", "atom"):
         if len(t.children) == 1:
             return _eval_any(t.children[0], scope)
+        # "( expr )" gibi: ortadakini döndür
         return _eval_any(t.children[-2], scope)
 
     if typ == "call":
-        fname, pos, kw = _collect_call_args(t, scope)
-        return _invoke_function(fname, pos, kw, scope) if fname else None
+        if not t.children:
+            return None
+        fname = str(t.children[0])
+        arg_nodes = t.children[1:] if len(t.children) > 1 else []
+        args = [_eval_any(a, scope) for a in arg_nodes]
+        # Kullanıcı fonksiyonu önce
+        fn = scope.get("__funcs__", {}).get(fname)
+        if callable(fn):
+            return fn(*args)
+        # stdlib (scope’a eklenen)
+        fn = scope.get("__stdlib__", {}).get(fname)
+        if callable(fn):
+            return fn(*args)
+        return None
 
+    if typ == "true_":
+        return True
+    if typ == "false_":
+        return False
+    if typ == "null_":
+        return None
+
+    # Bilinmiyorsa, çocuk varsa ilkini değerlendir
     if t.children:
         return _eval_any(t.children[0], scope)
     return None
+
 
 def _exec_block(stmts: List[Any], scope: Scope) -> Optional[Any]:
     for s in stmts:
@@ -265,88 +373,137 @@ def _exec_block(stmts: List[Any], scope: Scope) -> Optional[Any]:
             return r
     return None
 
+
 def _exec_stmt(stmt: Any, scope: Scope) -> Optional[Any]:
+    # Lark Tree('stmt', ...) ise evaluator’a yönlendir
     if isinstance(stmt, Tree) and getattr(stmt, "data", None) == "stmt":
         return _eval_tree(stmt, scope)
 
     t = getattr(stmt, "typ", None)
 
+    # -------- atama --------
     if t == "assign":
-        scope[stmt.name] = _eval_any(stmt.expr, scope)
+        name = stmt.name
+        val = _eval_any(stmt.expr, scope)
+        scope[name] = val
         return None
 
+    # -------- return --------
     if t == "return":
         val = _eval_any(stmt.expr, scope)
         scope["__return__"] = val
         return _ReturnSignal(val)
 
+    # -------- if --------
     if t == "if":
         cond = _eval_any(stmt.cond, scope)
         if _as_bool(cond):
-            then_stmts = getattr(stmt, "then", getattr(stmt, "then_block", []))
-            return _exec_block(then_stmts, scope)
+            return _exec_block(stmt.then, scope)
         else:
-            else_stmts = getattr(stmt, "else_", getattr(stmt, "else_block", []))
-            if else_stmts:
-                return _exec_block(else_stmts, scope)
+            if getattr(stmt, "else_", None):
+                return _exec_block(stmt.else_, scope)
         return None
 
+    # -------- for --------
     if t == "for":
         it = _eval_any(stmt.iterable, scope)
-        if it is None: return None
+        if it is None:
+            return None
         for v in it:
             scope[stmt.var] = v
-            block_stmts = getattr(stmt, "block", getattr(stmt, "body", []))
-            r = _exec_block(block_stmts, scope)
+            r = _exec_block(stmt.block, scope)
             if isinstance(r, _ReturnSignal):
                 return r
         return None
 
+    # -------- func (kullanıcı fonksiyonu tanımı) --------
     if t == "func":
         fname = stmt.name
         params = stmt.params or []
         body = stmt.block or []
-        def _fn_impl(*args, **kwargs):
+
+        def _fn_impl(*args):
+            # Çocuk scope
             child: Scope = {}
-            child["__funcs__"]  = scope.get("__funcs__", {})
+            # stdlib ve user funcs chain:
+            child["__funcs__"] = scope.get("__funcs__", {})
             child["__stdlib__"] = scope.get("__stdlib__", {})
+            # paramları bağla
             for i, p in enumerate(params):
-                child[p] = args[i] if i < len(args) else kwargs.get(p)
+                child[p] = args[i] if i < len(args) else None
+            # çalıştır
             r = _exec_block(body, child)
             if isinstance(r, _ReturnSignal):
                 return r.value
             return child.get("__return__", None)
+
+        # user funcs tablosuna yaz
         funcs = dict(scope.get("__funcs__", {}))
         funcs[fname] = _fn_impl
         scope["__funcs__"] = funcs
         return None
 
-    if t in ("call", "command"):
-        fname, pos, kw = _collect_call_args(stmt, scope)
-        return _invoke_function(fname, pos, kw, scope) if fname else None
+    # -------- call (bağımsız ifade olarak) --------
+    if t == "call":
+        return _eval_any(stmt, scope)
 
+    # -------- command --------
+    if t == "command":
+        # Komutları kwargs olarak topluyordu: stmt.args -> {key: expr_node}
+        args = {}
+        for k, v in (stmt.args or {}).items():
+            args[k] = _eval_any(v, scope)
+
+        # Önce kullanıcı fonksiyonu ismiyle eşleşiyor mu?
+        fn = scope.get("__funcs__", {}).get(stmt.name)
+        if callable(fn):
+            return fn(**args)
+
+        # Sonra stdlib (scope’a yerleştirdiğimiz)
+        fn = scope.get("__stdlib__", {}).get(stmt.name)
+        if callable(fn):
+            return fn(**args)
+
+        return None
+
+    # Tree olarak geldiyse (ör. 'stmt' dışı), evaluator’a
     if isinstance(stmt, Tree):
         return _eval_tree(stmt, scope)
 
+    # başka türler (noop)
     return None
 
-# ---------- Runner ----------
+
+# ============================================================
+# Runner
+# ============================================================
+
 class RunnerV2:
     def run_text(self, text: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         scope: Scope = {}
-        if variables: scope.update(variables)
 
+        # dışarıdan verilen değişkenler
+        if variables:
+            scope.update(variables)
+
+        # stdlib'i scope'a koy (echo scope’a bağlı olduğundan burada kur)
         scope["__stdlib__"] = dict(STDLIB_FUNCS)
         scope["__stdlib__"]["echo"] = _make_echo(scope)
+
+        # kullanıcı fonksiyonları için tablo
         scope["__funcs__"] = dict(scope.get("__funcs__", {}))
 
+        # parse
         ast = parse(text)
         if not isinstance(ast, list):
             ast = [ast]
 
         ret_val: Any = None
         for stmt in ast:
-            r = _eval_tree(stmt, scope) if isinstance(stmt, Tree) else _exec_stmt(stmt, scope)
+            if isinstance(stmt, Tree):
+                r = _eval_tree(stmt, scope)
+            else:
+                r = _exec_stmt(stmt, scope)
             if isinstance(r, _ReturnSignal):
                 ret_val = r.value
                 break
@@ -354,6 +511,7 @@ class RunnerV2:
         if ret_val is None:
             ret_val = scope.get("__return__", None)
 
+        # Vars: kullanıcıya sadece "görünür" olanlar
         vars_out = {k: v for k, v in scope.items() if not k.startswith("__")}
         return {"return": ret_val, "vars": vars_out}
 
