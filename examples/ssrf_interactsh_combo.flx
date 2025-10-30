@@ -1,0 +1,29 @@
+# examples/ssrf_interactsh_combo.flx
+# Kullanım:
+#   FLUXION_STDLIB=requests python -m fluxion -s examples/ssrf_interactsh_combo.flx -D oast=YOUR.oast.live -D token=$(date +%s)
+
+let oast = oast ?? "d41r8ucgtqkrv6t72u0gmht8euiepuo44.oast.live"
+let t    = token ?? "fluxion"
+let path = "/fluxion/combo"
+
+# 1) DNS beacon (aynı zamanda kolay korelasyon için query ekliyoruz)
+let b = oast_beacon({
+  sub: t,
+  domain: oast,
+  path: path,
+  q: {"tool": "fluxion", "mode": "combo", "token": t}
+})
+
+# 2) HTTP GET — birçok OAST sağlayıcı hem DNS hem HTTP’yi kaydeder
+if (b && b.url) {
+  let http = http_get(b.url)
+  echo value=jsonify({
+    "token": t,
+    "beacon": b,
+    "http": http
+  })
+} else {
+  echo value=jsonify({"token": t, "beacon": b, "http": null})
+}
+
+return (b && b.status ? b.status : 0)
