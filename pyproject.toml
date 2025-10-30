@@ -11,8 +11,9 @@ requires-python = ">=3.10"
 dependencies = [
   "lark>=1.1.7",
   "requests>=2.31.0",
-  "PyYAML>=6.0.1",
-  "rich>=13.7.0"
+  "pyyaml>=6.0.1",
+  "rich>=13.7.0",
+  "pytest>=8.4.2",
 ]
 
 [project.scripts]

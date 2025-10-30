@@ -1,0 +1,7 @@
+# Fluxion DSL Demo - Cybersecurity Scanning Tool
+# This demonstrates basic Fluxion syntax
+
+# Simple echo command
+echo message="Fluxion DSL is running!"
+echo status="ready"
+echo tool="cybersecurity_scanner"

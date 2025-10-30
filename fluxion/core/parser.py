@@ -110,7 +110,7 @@ def _desugar_line(line: str) -> str:
         for p in parts:
             k, _eq, v = p.partition('=')
             pairs.append(f"{k.strip()}: {v.strip()}")
-        return f"{indent}{head} {{ " + ", ".join(pairs) + " }}"
+        return f"{indent}{head} {{ " + ", ".join(pairs) + " }"
 
     return line
 

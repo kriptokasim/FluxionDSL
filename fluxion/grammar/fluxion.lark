@@ -1,4 +1,4 @@
-// ───────── Fluxion DSL Grammar (self-contained, no %import) ─────────
+// ───────── Fluxion DSL Grammar (Complete) ─────────
 
 // Whitespace & comments
 WS: /[ \t\f]+/
@@ -9,13 +9,14 @@ COMMENT_HASH : /#[^\n]*/
 %ignore COMMENT_SLASH
 %ignore COMMENT_HASH
 
-// Newlines (CRLF/ LF)
+// Newlines (CRLF / LF)
 NL: /(\r?\n)+/
 
 // Tokens
 IDENT: /[A-Za-z_][A-Za-z0-9_\-]*/
 EQUAL: "="
 COLON: ":"
+ARROW: "=>"
 
 // Strings: double-quoted with escapes
 DQSTRING: /"([^"\\]|\\.)*"/
@@ -23,39 +24,104 @@ DQSTRING: /"([^"\\]|\\.)*"/
 // Numbers: int / float / sci
 NUMBER: /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/
 
-// Entry
+// Entry point
 start: NL* (statement (NL)+)* statement? NL*
 
-// Lines can be assignments or commands
-statement: assignment
+// Statements
+?statement: assign
+         | return_
+         | if_
+         | for_
+         | func
          | command
+         | expr_stmt
+         | reassign
 
-// name = value
-assignment: IDENT EQUAL value                  -> assignment
+// let name = expr
+assign: "let" IDENT "=" expr
 
-// cmd key=value key:value ...
-command:    IDENT arglist?                     -> command
+// name = expr (reassignment)
+reassign: IDENT "=" expr
 
-// key/value pairs (space-separated list)
-arglist: (argpair)+                            -> arglist
+// return expr
+return_: "return" expr?
 
-// key = value   |   key : value
-argpair: key (EQUAL | COLON) value             -> argpair
-key:     IDENT                                 -> key
+// if (cond) { ... } else { ... }
+if_: "if" "(" expr ")" block ("else" (block | if_))?
 
-// Values
-?value:  DQSTRING                              -> string
-       | NUMBER                                -> number
-       | boolean                               -> boolean
-       | list                                  -> list
-       | map                                   -> map
-       | IDENT                                 -> bareword
+// for name in expr { ... }
+for_: "for" IDENT "in" expr block
 
-boolean: "true" | "false"
+// func name(params) { ... }
+func: "func" IDENT "(" param_list? ")" block
+param_list: IDENT ("," IDENT)*
 
-// [v1, v2, ...]
-list: "[" [value ("," value)*] "]"
+// Block of statements
+block: "{" NL* (statement (NL)+)* statement? NL* "}"
 
-// {k:v, k2=v2, ...} (both ':' or '=' allowed inside map)
-pair: key (COLON | EQUAL) value
-map:  "{" [pair ("," pair)*] "}"
+// Expression as statement
+expr_stmt: expr
+
+// Command: NAME { key: value, ... } or NAME (desugared from NAME key=value)
+command: IDENT map
+
+// Expressions with precedence
+?expr: ternary
+
+?ternary: logical_or ("?" expr ":" expr)?
+
+?logical_or: logical_and ("||" logical_and)*
+
+?logical_and: equality ("&&" equality)*
+
+?equality: comparison (("==" | "!=") comparison)*
+
+?comparison: nullish_coalesce (("<" | ">" | "<=" | ">=") nullish_coalesce)*
+
+?nullish_coalesce: additive ("??" additive)*
+
+?additive: multiplicative (("+" | "-") multiplicative)*
+
+?multiplicative: unary (("*" | "/" | "%") unary)*
+
+?unary: ("!" | "-" | "+") unary
+      | postfix
+
+?postfix: primary ("." IDENT)*
+
+?primary: call
+        | get_chain
+        | var
+        | dqstring
+        | number
+        | list
+        | map
+        | "(" expr ")"
+        | "true"  -> true_
+        | "false" -> false_
+        | "null"  -> null_
+        | "nil"   -> null_
+
+// Function call
+call: IDENT "(" arg_expr_list? ")"
+arg_expr_list: expr ("," expr)*
+
+// Property access chain
+get_chain: IDENT ("." IDENT)+
+
+// Variable reference
+var: IDENT
+
+// Literals
+dqstring: DQSTRING
+number: NUMBER
+
+// Collections
+list: "[" [expr ("," expr)*] "]"
+map:  "{" [keyval ("," keyval)*] "}"
+keyval: (IDENT | DQSTRING) (":" | "=") expr
+
+// Booleans and null
+true_: "true"
+false_: "false"
+null_: "null" | "nil"
