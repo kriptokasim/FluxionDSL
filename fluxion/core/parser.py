@@ -134,9 +134,29 @@ class BuildAST(Transformer):
     def var(self, name):     return Node("var", name=str(name))
 
     # collections
-    def list(self, *xs):     return Node("list", items=list(xs))
+    def list(self, *xs):     
+        items = []
+        for x in xs:
+            if isinstance(x, list):
+                items.extend(x)
+            else:
+                items.append(x)
+        return Node("list", items=items)
+    
+    def list_items(self, *xs): return list(xs)
+    
     def pair(self, k, v):    return (str(k), v)
-    def map(self, *pairs):   return Node("map", items=dict(pairs))
+    
+    def map(self, *items_or_pairs):
+        pairs = []
+        for x in items_or_pairs:
+            if isinstance(x, list):
+                pairs.extend(x)
+            else:
+                pairs.append(x)
+        return Node("map", items=dict(pairs))
+    
+    def map_items(self, *pairs): return list(pairs)
 
     # args
     def arg_list(self, *pairs):
@@ -148,26 +168,64 @@ class BuildAST(Transformer):
                 out.append(p)
         return out
 
-    def keyval(self, k, v):  return (str(k), v)
+    def keyval(self, *args):
+        # k : v  or  k = v => filter out colon/equals
+        filtered = [a for a in args if not (isinstance(a, Token) and a.type in ('COLON', 'EQUAL'))]
+        return (str(filtered[0]), filtered[1])
 
     def arg_expr_list(self, *exprs):
+        # Filter out commas and collect expressions
         out = []
         for e in exprs:
-            if isinstance(e, Tree):
+            if isinstance(e, Token) and e.type == 'COMMA':
+                continue
+            elif isinstance(e, Tree):
                 out.extend(e.children)
             else:
                 out.append(e)
         return out
 
-    # statements
-    def assign(self, name, expr): return Node("assign", name=str(name), expr=expr)
-    def return_(self, expr):     return Node("return", expr=expr)
-    def if_(self, cond, then_b, else_b=None): return Node("if", cond=cond, then=then_b or [], else_=else_b or [])
-    def for_(self, name, iterable, block):    return Node("for", var=str(name), iterable=iterable, block=block or [])
-    def func(self, name, params=None, block=None):
+    # statements (updated to handle keyword tokens from keep_all_tokens)
+    def assign(self, *args): 
+        # let name = expr OR name = expr => filter out keyword tokens
+        filtered = [a for a in args if not (isinstance(a, Token) and a.type in ('LET', 'EQUAL'))]
+        return Node("assign", name=str(filtered[0]), expr=filtered[1])
+    
+    def return_(self, *args):
+        # return expr => filter out 'return' keyword
+        filtered = [a for a in args if not (isinstance(a, Token) and a.type == 'RETURN')]
+        expr = filtered[0] if filtered else None
+        return Node("return", expr=expr)
+    
+    def if_(self, *args):
+        # if ( cond ) block else block => filter keywords/punctuation
+        filtered = [a for a in args if not (isinstance(a, Token) and a.type in ('IF', 'LPAR', 'RPAR', 'ELSE'))]
+        # filtered: [cond, then_block, else_block?]
+        cond = filtered[0]
+        then_b = filtered[1] if len(filtered) > 1 else []
+        else_b = filtered[2] if len(filtered) > 2 else []
+        return Node("if", cond=cond, then=then_b or [], else_=else_b or [])
+    
+    def for_(self, *args):
+        # for name in expr block => filter keywords
+        filtered = [a for a in args if not (isinstance(a, Token) and a.type in ('FOR', 'IN'))]
+        return Node("for", var=str(filtered[0]), iterable=filtered[1], block=filtered[2] or [])
+    
+    def func(self, *args):
+        # func name ( params? ) block => filter keywords/punctuation
+        filtered = [a for a in args if not (isinstance(a, Token) and a.type in ('FUNC', 'LPAR', 'RPAR'))]
+        name = filtered[0]
+        params = filtered[1] if len(filtered) > 2 and isinstance(filtered[1], list) else []
+        block = filtered[-1] if filtered else []
         return Node("func", name=str(name), params=[str(p) for p in (params or [])], block=block or [])
-    def param_list(self, *names): return list(names)
-    def block(self, *stmts):      return list(stmts)
+    
+    def param_list(self, *names): 
+        # Filter out commas
+        return [n for n in names if not (isinstance(n, Token) and n.type == 'COMMA')]
+    
+    def block(self, *stmts):
+        # Filter out braces and newlines
+        return [s for s in stmts if not (isinstance(s, Token) and s.type in ('LBRACE', 'RBRACE', 'NL'))]
 
     def command(self, name, args=None):
         pairs = []
@@ -198,19 +256,19 @@ class BuildAST(Transformer):
         return Node("command", name=str(name), args=dict(norm))
 
     # calls
-    def call(self, name, *rest):
-        if not rest:
-            argv = []
-        elif len(rest) == 1:
-            a = rest[0]
+    def call(self, *args):
+        # name ( arg_list? ) => filter out parentheses
+        filtered = [a for a in args if not (isinstance(a, Token) and a.type in ('LPAR', 'RPAR'))]
+        name = filtered[0]
+        argv = []
+        if len(filtered) > 1:
+            a = filtered[1]
             if isinstance(a, list):
                 argv = a
             elif isinstance(a, Tree):
                 argv = list(a.children)
             else:
                 argv = [a]
-        else:
-            argv = list(rest)
         return Node("call", name=str(name), args=argv)
 
     # get chain
@@ -223,11 +281,47 @@ class BuildAST(Transformer):
                 base = Node("get", obj=base, name=str(p))
         return base
 
-    def reassign(self, name, expr):
-        return Node('assign', name=str(name), expr=expr)
+    def reassign(self, *args):
+        # name = expr => filter out equals
+        filtered = [a for a in args if not (isinstance(a, Token) and a.type == 'EQUAL')]
+        return Node('assign', name=str(filtered[0]), expr=filtered[1])
 
     def getprop(self, base, name):
         return Node('getprop', base=base, name=str(name))
+    
+    # Arithmetic and logical operations - preserve operator tokens
+    def additive(self, *args):
+        # Return Tree with alternating operands and operators
+        return Tree('additive', list(args))
+    
+    def multiplicative(self, *args):
+        return Tree('multiplicative', list(args))
+    
+    def logical_or(self, *args):
+        return Tree('logical_or', list(args))
+    
+    def logical_and(self, *args):
+        return Tree('logical_and', list(args))
+    
+    def equality(self, *args):
+        return Tree('equality', list(args))
+    
+    def comparison(self, *args):
+        return Tree('comparison', list(args))
+    
+    def nullish_coalesce(self, *args):
+        return Tree('nullish_coalesce', list(args))
+    
+    def ternary(self, *args):
+        if len(args) == 1:
+            return args[0]
+        # condition ? then_val : else_val
+        return Tree('ternary', list(args))
+    
+    def unary(self, *args):
+        if len(args) == 1:
+            return args[0]
+        return Tree('unary', list(args))
 
 
 def _build_parser():
@@ -237,6 +331,7 @@ def _build_parser():
             start="start",
             parser="lalr",
             maybe_placeholders=True,
+            keep_all_tokens=True,
         )
     except GrammarError:
         return Lark(
@@ -245,6 +340,7 @@ def _build_parser():
             parser="earley",
             lexer="dynamic_complete",
             maybe_placeholders=True,
+            keep_all_tokens=True,
         )
 
 

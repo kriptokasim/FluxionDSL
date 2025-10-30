@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 import json
 from lark import Tree
 from fluxion.core.parser import parse
+from fluxion import stdlib as flx_stdlib
 
 # ---------- helpers ----------
 class _ReturnSignal:
@@ -66,13 +67,9 @@ def http_head(_url: str) -> Dict[str, Any]:
 def http_get(_url: str) -> Dict[str, Any]:
     return {"ok": False, "status": 0, "elapsed_ms": 0, "length": 0, "text_preview": ""}
 
-STDLIB_FUNCS = {
-    "jsonify": jsonify,
-    "join": join,
-    "http_head": http_head,
-    "http_get": http_get,
-    # echo scope’a enjekte ediliyor
-}
+STDLIB_FUNCS = dict(flx_stdlib.FUNCS)
+STDLIB_FUNCS["len"] = len
+# echo scope'a enjekte ediliyor
 
 # ---------- invocation plumbing ----------
 def _invoke_function(fname: str, args_pos: List[Any], args_kw: Dict[str, Any], scope: Scope) -> Any:
@@ -186,8 +183,8 @@ def _eval_tree(t: Tree, scope: Scope) -> Any:
     if typ == "stmt":
         return _exec_stmt(t.children[0], scope) if t.children else None
 
-    # expr ağaçları
-    if typ == "coalesce":
+    # expr ağaçları (updated for new grammar)
+    if typ in ("coalesce", "nullish_coalesce"):
         val = _eval_any(t.children[0], scope); i = 1
         while i < len(t.children):
             rhs = _eval_any(t.children[i + 1], scope)
@@ -195,7 +192,7 @@ def _eval_tree(t: Tree, scope: Scope) -> Any:
             val = rhs; i += 2
         return val
 
-    if typ == "or_expr":
+    if typ in ("or_expr", "logical_or"):
         val = _eval_any(t.children[0], scope); i = 1
         while i < len(t.children):
             rhs = _eval_any(t.children[i + 1], scope)
@@ -203,7 +200,7 @@ def _eval_tree(t: Tree, scope: Scope) -> Any:
             val = _as_bool(val) or _as_bool(rhs); i += 2
         return val
 
-    if typ == "and_expr":
+    if typ in ("and_expr", "logical_and"):
         val = _eval_any(t.children[0], scope); i = 1
         while i < len(t.children):
             rhs = _eval_any(t.children[i + 1], scope)
@@ -211,7 +208,7 @@ def _eval_tree(t: Tree, scope: Scope) -> Any:
             val = _as_bool(val) and _as_bool(rhs); i += 2
         return val
 
-    if typ == "compare":
+    if typ in ("compare", "comparison", "equality"):
         left = _eval_any(t.children[0], scope); i = 1
         while i < len(t.children):
             op = str(t.children[i]); right = _eval_any(t.children[i + 1], scope)
@@ -226,7 +223,7 @@ def _eval_tree(t: Tree, scope: Scope) -> Any:
             left = right; i += 2
         return True
 
-    if typ == "sum":
+    if typ in ("sum", "additive"):
         val = _eval_any(t.children[0], scope); i = 1
         while i + 1 < len(t.children):
             op = str(t.children[i]); rhs = _eval_any(t.children[i + 1], scope)
@@ -235,7 +232,7 @@ def _eval_tree(t: Tree, scope: Scope) -> Any:
             i += 2
         return val
 
-    if typ == "term":
+    if typ in ("term", "multiplicative"):
         val = _eval_any(t.children[0], scope); i = 1
         while i + 1 < len(t.children):
             op = str(t.children[i]); rhs = _eval_any(t.children[i + 1], scope)
@@ -286,9 +283,12 @@ def _exec_stmt(stmt: Any, scope: Scope) -> Optional[Any]:
     if t == "if":
         cond = _eval_any(stmt.cond, scope)
         if _as_bool(cond):
-            return _exec_block(stmt.then_block, scope)
-        elif stmt.else_block:
-            return _exec_block(stmt.else_block, scope)
+            then_stmts = getattr(stmt, "then", getattr(stmt, "then_block", []))
+            return _exec_block(then_stmts, scope)
+        else:
+            else_stmts = getattr(stmt, "else_", getattr(stmt, "else_block", []))
+            if else_stmts:
+                return _exec_block(else_stmts, scope)
         return None
 
     if t == "for":
@@ -296,7 +296,8 @@ def _exec_stmt(stmt: Any, scope: Scope) -> Optional[Any]:
         if it is None: return None
         for v in it:
             scope[stmt.var] = v
-            r = _exec_block(stmt.body, scope)
+            block_stmts = getattr(stmt, "block", getattr(stmt, "body", []))
+            r = _exec_block(block_stmts, scope)
             if isinstance(r, _ReturnSignal):
                 return r
         return None

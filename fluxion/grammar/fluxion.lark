@@ -70,19 +70,19 @@ command: IDENT map
 
 ?ternary: logical_or ("?" expr ":" expr)?
 
-?logical_or: logical_and ("||" logical_and)*
+logical_or: logical_and ("||" logical_and)*
 
-?logical_and: equality ("&&" equality)*
+logical_and: equality ("&&" equality)*
 
-?equality: comparison (("==" | "!=") comparison)*
+equality: comparison (("==" | "!=") comparison)*
 
-?comparison: nullish_coalesce (("<" | ">" | "<=" | ">=") nullish_coalesce)*
+comparison: nullish_coalesce (("<" | ">" | "<=" | ">=") nullish_coalesce)*
 
-?nullish_coalesce: additive ("??" additive)*
+nullish_coalesce: additive ("??" additive)*
 
-?additive: multiplicative (("+" | "-") multiplicative)*
+additive: multiplicative (("+" | "-") multiplicative)*
 
-?multiplicative: unary (("*" | "/" | "%") unary)*
+multiplicative: unary (("*" | "/" | "%") unary)*
 
 ?unary: ("!" | "-" | "+") unary
       | postfix
@@ -117,8 +117,12 @@ dqstring: DQSTRING
 number: NUMBER
 
 // Collections
-list: "[" [expr ("," expr)*] "]"
-map:  "{" [keyval ("," keyval)*] "}"
+list: "[" NL* list_items? NL* "]"
+list_items: expr (NL* "," NL* expr)* (NL* ",")?
+
+map:  "{" NL* map_items? NL* "}"
+map_items: keyval (NL* "," NL* keyval)* (NL* ",")?
+
 keyval: (IDENT | DQSTRING) (":" | "=") expr
 
 // Booleans and null

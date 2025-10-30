@@ -22,9 +22,9 @@ args = "Fluxion Demo"
 name = "Fluxion Demo"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "python -m fluxion -s demo.flx"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python -m fluxion -s security_demo.flx"
