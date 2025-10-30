@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import json
 import time
 import socket
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 import requests
 from lark import Tree
@@ -23,6 +23,15 @@ Scope = Dict[str, Any]
 
 # Bazı sabitler
 BOOLS = {"true": True, "false": False, "null": None, "nil": None}
+
+
+def _scope_get(scope: Scope, key: str, default: Any = None) -> Any:
+    cur: Optional[Scope] = scope
+    while cur is not None:
+        if key in cur:
+            return cur[key]
+        cur = cur.get("__parent__")  # type: ignore[arg-type]
+    return default
 
 # ============================================================
 # Stdlib (minimal)
@@ -98,6 +107,15 @@ def jsonify(*args, **kwargs):
 
 def join(*args):
     return "".join(str(a) for a in args)
+
+def url_encode(value: Any, safe: str = "") -> str:
+    return quote(str(value), safe=safe)
+
+def replace(value: Any, old: Any, new: Any) -> str:
+    return str(value).replace(str(old), str(new))
+
+def to_str(value: Any) -> str:
+    return str(value)
 
 def _http_head_impl(url: str, timeout: float = 5.0, allow_redirects: bool = True, verify: bool = False):
     try:
@@ -211,6 +229,9 @@ def oast_beacon(*args, **kwargs):
 STDLIB_FUNCS = {
     "jsonify": jsonify,
     "join": join,
+    "url_encode": url_encode,
+    "replace": replace,
+    "str": to_str,
     "len": len,            # küçük ama faydalı
     "http_head": http_head,
     "http_get": http_get,
@@ -262,7 +283,7 @@ def _eval_any(node: Any, scope: Scope) -> Any:
             name = node.name
             if name in BOOLS:
                 return BOOLS[name]
-            return scope.get(name)
+            return _scope_get(scope, name)
         if t == "list":
             return [_eval_any(x, scope) for x in node.items]
         if t == "map":
@@ -286,11 +307,13 @@ def _eval_any(node: Any, scope: Scope) -> Any:
                     args.append(_eval_any(a, scope))
 
             # user fn?
-            fn = scope.get("__funcs__", {}).get(fname)
+            funcs = _scope_get(scope, "__funcs__", {})
+            fn = funcs.get(fname) if isinstance(funcs, dict) else None
             if callable(fn):
                 return fn(*args)
             # stdlib?
-            fn = scope.get("__stdlib__", {}).get(fname)
+            stdlib = _scope_get(scope, "__stdlib__", {})
+            fn = stdlib.get(fname) if isinstance(stdlib, dict) else None
             if callable(fn):
                 return fn(*args)
             return None
@@ -453,11 +476,13 @@ def _eval_tree(t: Tree, scope: Scope) -> Any:
         arg_nodes = t.children[1:] if len(t.children) > 1 else []
         args = [_eval_any(a, scope) for a in arg_nodes]
         # Kullanıcı fonksiyonu önce
-        fn = scope.get("__funcs__", {}).get(fname)
+        funcs = _scope_get(scope, "__funcs__", {})
+        fn = funcs.get(fname) if isinstance(funcs, dict) else None
         if callable(fn):
             return fn(*args)
         # stdlib (scope’a eklenen)
-        fn = scope.get("__stdlib__", {}).get(fname)
+        stdlib = _scope_get(scope, "__stdlib__", {})
+        fn = stdlib.get(fname) if isinstance(stdlib, dict) else None
         if callable(fn):
             return fn(*args)
         return None
@@ -535,8 +560,9 @@ def _exec_stmt(stmt: Any, scope: Scope) -> Optional[Any]:
             # Çocuk scope
             child: Scope = {}
             # stdlib ve user funcs chain:
-            child["__funcs__"] = scope.get("__funcs__", {})
-            child["__stdlib__"] = scope.get("__stdlib__", {})
+            child["__parent__"] = scope
+            child["__funcs__"] = _scope_get(scope, "__funcs__", {})
+            child["__stdlib__"] = _scope_get(scope, "__stdlib__", {})
             # paramları bağla
             for i, p in enumerate(params):
                 child[p] = args[i] if i < len(args) else None
@@ -547,7 +573,8 @@ def _exec_stmt(stmt: Any, scope: Scope) -> Optional[Any]:
             return child.get("__return__", None)
 
         # user funcs tablosuna yaz
-        funcs = dict(scope.get("__funcs__", {}))
+        parent_funcs = _scope_get(scope, "__funcs__", {})
+        funcs = dict(parent_funcs) if isinstance(parent_funcs, dict) else {}
         funcs[fname] = _fn_impl
         scope["__funcs__"] = funcs
         return None

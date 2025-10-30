@@ -17,9 +17,18 @@ for u in targets {
   out = out + [ { "url": u, "head": h, "get": g } ]
 }
 
+let ok_count = 0
+for res in out {
+  let head_ok = res.head && res.head.ok
+  let get_ok = res.get && res.get.ok
+  if (head_ok || get_ok) {
+    ok_count = ok_count + 1
+  }
+}
+
 echo value=jsonify({
   "results": out,
-  "ok_count": len([1 for r in out if (r.get && r.get.ok) || (r.head && r.head.ok)]),
+  "ok_count": ok_count,
   "total": len(out)
 })
 
