@@ -1,0 +1,9 @@
+# -D oast=... -D token=... ile geliyor varsayıyoruz
+let warm = warm ?? null
+echo value=(join("warmup_status=", warm))
+
+# tek bir örnek JSON çıktısı
+let payload = jsonify({"oast": oast, "token": token})
+echo value=payload
+
+return 1

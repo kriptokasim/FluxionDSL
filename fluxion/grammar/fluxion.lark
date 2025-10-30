@@ -1,0 +1,61 @@
+// ───────── Fluxion DSL Grammar (self-contained, no %import) ─────────
+
+// Whitespace & comments
+WS: /[ \t\f]+/
+%ignore WS
+
+COMMENT_SLASH: /\/\/[^\n]*/
+COMMENT_HASH : /#[^\n]*/
+%ignore COMMENT_SLASH
+%ignore COMMENT_HASH
+
+// Newlines (CRLF/ LF)
+NL: /(\r?\n)+/
+
+// Tokens
+IDENT: /[A-Za-z_][A-Za-z0-9_\-]*/
+EQUAL: "="
+COLON: ":"
+
+// Strings: double-quoted with escapes
+DQSTRING: /"([^"\\]|\\.)*"/
+
+// Numbers: int / float / sci
+NUMBER: /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/
+
+// Entry
+start: NL* (statement (NL)+)* statement? NL*
+
+// Lines can be assignments or commands
+statement: assignment
+         | command
+
+// name = value
+assignment: IDENT EQUAL value                  -> assignment
+
+// cmd key=value key:value ...
+command:    IDENT arglist?                     -> command
+
+// key/value pairs (space-separated list)
+arglist: (argpair)+                            -> arglist
+
+// key = value   |   key : value
+argpair: key (EQUAL | COLON) value             -> argpair
+key:     IDENT                                 -> key
+
+// Values
+?value:  DQSTRING                              -> string
+       | NUMBER                                -> number
+       | boolean                               -> boolean
+       | list                                  -> list
+       | map                                   -> map
+       | IDENT                                 -> bareword
+
+boolean: "true" | "false"
+
+// [v1, v2, ...]
+list: "[" [value ("," value)*] "]"
+
+// {k:v, k2=v2, ...} (both ':' or '=' allowed inside map)
+pair: key (COLON | EQUAL) value
+map:  "{" [pair ("," pair)*] "}"

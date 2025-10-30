@@ -1,0 +1,3 @@
+# Interpolation testi
+echo value="X={{1}}"
+return 0

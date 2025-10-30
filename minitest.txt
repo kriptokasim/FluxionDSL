@@ -1,0 +1,8 @@
+Mini kontrol listesi (gelecekte tekrar kurarken):
+
+# taze venv
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel --break-system-packages
+python -m pip install -e . --break-system-packages
+python -m pytest -q    # 3 passed
+python -m fluxion -s examples/ssrf_batch_extended.flx

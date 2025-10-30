@@ -1,0 +1,53 @@
+# Hedef listesi
+let targets = targets ?? [
+  "http://127.0.0.1:80/",
+  "http://localhost:8080/",
+  "http://169.254.169.254/",
+  "http://example.com/"
+]
+
+let results = []
+let hits = 0
+
+for t in targets {
+  let h = http_head(t)
+  let g = null
+
+  if (h && h.ok && (h.status >= 200 && h.status < 400)) {
+    g = http_get(t)
+    if (g && g.ok) { hits = hits + 1 }
+  }
+
+  # objeyi parça parça kur (ternary yok)
+  let head_obj = {
+    "ok": (h ? h.ok : null),
+    "status": (h ? h.status : null),
+    "elapsed_ms": (h ? h.elapsed_ms : null),
+    "length": (h ? h.length : null)
+  }
+
+  let get_obj = null
+  if (g) {
+    get_obj = {
+      "ok": g.ok,
+      "status": g.status,
+      "elapsed_ms": g.elapsed_ms,
+      "length": g.length,
+      "text_preview": g.text_preview
+    }
+  }
+
+  let rec = {
+    "url": t,
+    "head": head_obj,
+    "get": get_obj
+  }
+
+  results = results + [ rec ]
+}
+
+# JSON’u string olarak üret ve echo ile bastır
+let out_json = jsonify({"results": results, "ok_count": hits, "total": len(targets)})
+echo value=out_json
+
+return hits
