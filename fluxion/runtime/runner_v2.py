@@ -149,10 +149,15 @@ def _http_get_impl(url: str, timeout: float = 5.0, allow_redirects: bool = True,
     except Exception as e:
         return {"ok": False, "status": 0, "elapsed_ms": 0, "length": 0, "text_preview": "", "error": str(e), "headers": {}}
 
-def length(value):
+def _std_len(x):
+    """Safe len: None -> 0, dict -> len(keys), diğer non-sized tiplerde 0."""
+    if x is None:
+        return 0
     try:
-        return len(value)
-    except Exception:
+        return len(x)
+    except TypeError:
+        if isinstance(x, dict):
+            return len(x.keys())
         return 0
 
 # Minimal http_* dummy’leri
@@ -233,9 +238,15 @@ STDLIB_FUNCS = {
     "replace": replace,
     "str": to_str,
     "len": len,            # küçük ama faydalı
+    "len": _std_len,       # None/dict/unsized için güvenli
     "http_head": http_head,
     "http_get": http_get,
     "oast_beacon": oast_beacon,
+# ---- Index & pick helpers (grammar değiştirmeden xs[i] ihtiyacını çözer) ----
+    "at": lambda xs, i: (xs[i] if isinstance(xs, (list, tuple)) and 0 <= int(i) < len(xs) else None),
+    "get": lambda m, k, d=None: (m.get(k, d) if isinstance(m, dict) else d),
+    "first": lambda xs: (xs[0] if isinstance(xs, (list, tuple)) and len(xs) > 0 else None),
+    "last": lambda xs: (xs[-1] if isinstance(xs, (list, tuple)) and len(xs) > 0 else None),
     # "echo" dinamik eklenecek (_make_echo)
 }
 
